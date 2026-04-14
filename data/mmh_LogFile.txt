@@ -1,0 +1,2 @@
+27-Oct-2018 13:23:19: IsFPGA:,0,0,
+27-Oct-2018 13:23:20: D:\git\ar1xxx_mmwavestudio_oct_6\mmWaveStudioPkg\mmWaveStudio_External\RunTime,0,
