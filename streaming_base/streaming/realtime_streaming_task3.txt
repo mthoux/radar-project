@@ -2,29 +2,12 @@
 import time
 import numpy as np
 from multiprocessing import Process, Queue
-from scipy.ndimage import label, center_of_mass, uniform_filter
+from scipy.ndimage import label, center_of_mass
 
 # import the producer (should not import GUI libs)
 from streaming_base.streaming.prod_dca import producer_real_time_1843
 
 from scipy.ndimage import label, center_of_mass
-
-def ca_cfar_2d(heatmap, n_train, n_guard, threshold_scale):
-    # Taille de la fenêtre totale et de la zone de garde
-    win_size = 2 * (n_train + n_guard) + 1
-    guard_size = 2 * n_guard + 1
-    
-    # On calcule la somme locale, puis on retire la zone centrale (garde)
-    sum_window = uniform_filter(heatmap, size=win_size, mode='constant') * (win_size**2)
-    sum_guard = uniform_filter(heatmap, size=guard_size, mode='constant') * (guard_size**2)
-    
-    # Moyenne du bruit = (Somme Totale - Somme Garde) / Nombre de pixels d'entraînement
-    kernel_area = win_size**2 - guard_size**2
-    noise_floor = (sum_window - sum_guard) / kernel_area
-    
-    # Seuil adaptatif
-    threshold = noise_floor * threshold_scale
-    return heatmap > threshold
 
 # -------------------------
 # Visualization code is moved into a function so it is only imported/run
@@ -58,10 +41,9 @@ def run_visualization(q1, cfg_radar, cfg_cfar):
 
 
     class MyApp(ShowBase):
-        def __init__(self, queue_1, cfg_radar, cfg_cfar):
+        def __init__(self, queue_1, cfg_radar):
             ShowBase.__init__(self)
             self.q1 = queue_1
-            self.cfg_cfar = cfg_cfar
             self.latest_msg = {}
             self.msg_count = set()
 
@@ -153,40 +135,30 @@ def run_visualization(q1, cfg_radar, cfg_cfar):
                 to_plot /= mx 
                 to_plot = to_plot
 
-                # ---- NOUVELLE DÉTECTION CFAR ----
-                if self.cfg_cfar["cfar_on"]:
-                    # On lance l'algorithme sur l'image actuelle (to_plot)
-                    binary_map = ca_cfar_2d(
-                        to_plot, 
-                        n_train=self.cfg_cfar["num_train_r"], 
-                        n_guard=self.cfg_cfar["num_guard_r"], 
-                        threshold_scale=self.cfg_cfar["threshold_scale"]
-                    )
+                # ---- ADDED: simple mooving things detection ----
+                if self.prev_frame is not None:
+                    # compute difference between current and previous frame
+                    diff = np.abs(to_plot - self.prev_frame)
+
+                    # only keep pixels that changed significantly
+                    motion_threshold = 0.3  # tune this: higher = less sensitive
+                    binary_map = diff > motion_threshold
 
                     labeled, num_blobs = label(binary_map)
 
                     if num_blobs > 0:
-                        print(f"CFAR : {num_blobs} objet(s) détecté(s) !")
-                        centers = center_of_mass(to_plot, labeled, range(1, num_blobs + 1))
+                        print("There is someone moving!")
+                        centers = center_of_mass(diff, labeled, range(1, num_blobs + 1))
+                        for angle_idx, range_idx in centers:
+                            angle = self.phi[int(angle_idx)]
+                            distance = range_idx * 0.045
+                            x = distance * np.sin(angle)
+                            y = distance * np.cos(angle)
+                            print(f"  → moving object at x={x:.2f}m, y={y:.2f}m")
 
-                        for r_idx, phi_idx in centers:
-                            # --- CORRECTION ICI : On vérifie si les indices sont des nombres valides ---
-                            if np.isnan(r_idx) or np.isnan(phi_idx):
-                                continue # On ignore cette détection invalide
-                            
-                            # On convertit en int après avoir vérifié
-                            r_idx_int = int(r_idx)
-                            phi_idx_int = int(phi_idx)
-
-                            # Sécurité supplémentaire : on vérifie qu'on ne sort pas des limites de la liste
-                            if r_idx_int < len(self.r_idxs) and phi_idx_int < len(self.phi):
-                                angle = self.phi[phi_idx_int]
-                                distance = self.r_idxs[r_idx_int] * 0.045
-                                
-                                x = distance * np.sin(angle)
-                                y = distance * np.cos(angle)
-                                print(f"  → Cible à x={x:.2f}m, y={y:.2f}m")
-                # --------------------------------
+                
+                self.prev_frame = to_plot.copy()
+                # ---- END OF DETECTION CODE ----
 
                 self.im.set_array(to_plot.ravel()) 
 
@@ -206,7 +178,7 @@ def run_visualization(q1, cfg_radar, cfg_cfar):
             return Task.cont
 
     # instantiate and run (this stays in the main process)
-    app = MyApp(q1, cfg_radar, cfg_cfar)
+    app = MyApp(q1, cfg_radar)
     app.run()
 
 

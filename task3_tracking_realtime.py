@@ -47,14 +47,14 @@ def main(cfar_on):
         "num_train_d": 10,
         "num_guard_r": 4,
         "num_guard_d": 2,
-        "threshold_scale": 1e-3
+        "threshold_scale": 5
     }
 
     print("Starting streaming...")
 
     # Start the streaming process
-    #realtime_streaming_task3.main(cfg_radar, cfg_cfar)
-    moovingObj_streaming.main(cfg_radar, cfg_cfar)
+    realtime_streaming_task3.main(cfg_radar, cfg_cfar)
+    # moovingObj_streaming.main(cfg_radar, cfg_cfar)
 
 if __name__ == "__main__":
     
