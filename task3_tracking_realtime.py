@@ -47,7 +47,7 @@ def main(cfar_on):
         "num_train_d": 10,
         "num_guard_r": 4,
         "num_guard_d": 2,
-        "threshold_scale": 5
+        "threshold_scale": 10
     }
 
     print("Starting streaming...")

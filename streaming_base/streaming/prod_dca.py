@@ -5,7 +5,6 @@ import time
 # from streaming_base.mmwave.dataloader.adc import DCA1000 
 from streaming_base.processing.processing import process_frame, get_accumulated_time_data, process_frame_2d
 
-from task4_vital_signs_TODO import get_freq, get_br_hr
 from task3_tracking_TODO import beamform_2d
 
 from streaming_base.utils.utils import get_ant_pos_2d 
@@ -121,85 +120,3 @@ def producer_real_time_1843(q, cfg_radar, cfg_cfar, config_port, data_port, stat
     # finally:
         # dca.close()
 
-def producer_real_time_1843_task4(q, cfg_radar, cfg_cfar, config_port, data_port, static_ip, system_ip):
-    """
-    Producer function for real-time data acquisition from the DCA1000 connected to the AWR1843 radar.
-
-    Parameters
-    ----------
-    q : queue.Queue
-        The queue to which the processed data will be sent.
-    cfg_radar : dict
-        Configuration parameters for the radar, including range indices, number of transmitters, receivers, chirp loops, and ADC samples. 
-    config_port : str
-        The port for the DCA1000 configuration.
-    data_port : str
-        The port for the DCA1000 data.
-    static_ip : str
-        The static IP address for the DCA1000.
-    system_ip : str
-        The system IP address.
-    """
-
-    # Parameters
-    r_idxs = cfg_radar["range_idx"]
-    num_tx = cfg_radar["num_tx"]
-    num_rx = cfg_radar["num_rx"]
-    chirp_loops = cfg_radar["num_doppler"]
-    adc_samples = cfg_radar["samples_per_chirp"]
-
-    # Setup the DCA1000
-    print("Starting producer for DCA1000 with ip " + static_ip + " and system ip " + system_ip)
-    dca = DCA1000()
-    dca.sensor_config(chirps=num_tx, chirp_loops=chirp_loops, num_rx=num_rx, num_samples=adc_samples)
-
-    print("DCA1000 initialized.")
-            
-
-    last_frame = np.zeros((1, chirp_loops, adc_samples), dtype=np.complex64)
-    acc_time_data = np.zeros(shape=(cfg_radar['num_frames'], cfg_radar['samples_per_chirp']), dtype=np.complex128)
-    second_p = 0
-    try:
-        while True:
-            # Read data from DCA1000
-            # raw = read_packet(num_rx, num_tx, adc_samples)
-
-            adc_data = dca.read()
-            raw = dca.organize(raw_frame=adc_data, num_chirps=num_tx*chirp_loops,
-            num_rx=num_rx, num_samples=adc_samples, num_frames=1, model='1843') # frames x chirps x samples x rx
-            if raw is None:
-                continue
-            if not q.empty():
-                continue
-            
-            # Apply Hamming window
-            # adc_windowed = raw * np.hamming(adc_samples)
-
-            # Reshape the data to (num_tx*num_rx, chirp_loops, adc_samples)
-            raw = raw.reshape(chirp_loops, num_tx, num_rx, adc_samples)
-            raw = raw.transpose(1, 2, 0, 3) # tx, rx, loops, adc samples
-            # raw = raw.reshape(num_tx*num_rx, chirp_loops, adc_samples)
-            raw_all = raw.squeeze() # for heatrate/breathing rate we can just use one antenna
-            range_fft = np.fft.fft(np.sum(raw_all, axis=(0,1)), axis=-1)
-            raw = raw[0,-1,:,:].squeeze() # for heatrate/breathing rate we can just use one antenna
-            # raw = np.sum(raw[[0,2],:,:,:], axis=(0,1,2)) # for heatrate/breathing rate we can just use one antenna
-
-
-            # Compute breathing rate/heartrate 
-            acc_time_data  = get_accumulated_time_data(acc_time_data, range_fft)
-            range_fft = abs(range_fft)
-            phase_data, second_p, max_idx = get_br_hr(range_fft, acc_time_data, second_p, cfg_radar)
-            freq_data, freqs, bpm = get_freq(phase_data, cfg_radar['periodicity'])
-            
-            # Send the data to the queue
-            try:
-                # q.put_nowait(("time", (acc_time_data)))
-                q.put(("data", (range_fft/np.max(range_fft), phase_data, max_idx, freq_data/np.max(freq_data), freqs, bpm))) 
-                # q.put_nowait(("freq", (freq_data)))
-            except queue.Full:
-                continue
-
-    except KeyboardInterrupt:
-        print("Producer for DCA1000 with ip " + static_ip + " and system ip " + system_ip + " stopped by user.")
-    # finally:
-        # dca.close()
