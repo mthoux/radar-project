@@ -141,7 +141,7 @@ def run_visualization(q1, cfg_radar, cfg_cfar):
                     diff = np.abs(to_plot - self.prev_frame)
 
                     # only keep pixels that changed significantly
-                    motion_threshold = 0.3  # tune this: higher = less sensitive
+                    motion_threshold = 0.  # tune this: higher = less sensitive
                     binary_map = diff > motion_threshold
 
                     labeled, num_blobs = label(binary_map)
