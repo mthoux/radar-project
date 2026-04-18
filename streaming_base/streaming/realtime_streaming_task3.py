@@ -6,6 +6,8 @@ from multiprocessing import Process, Queue
 # import the producer (should not import GUI libs)
 from streaming_base.streaming.prod_dca import producer_real_time_1843
 
+from scipy.ndimage import label, center_of_mass
+
 # -------------------------
 # Visualization code is moved into a function so it is only imported/run
 # in the main process (no GUI imports at module top-level)
@@ -78,6 +80,8 @@ def run_visualization(q1, cfg_radar, cfg_cfar):
             self.ax.set_rticks(radial_bins)
             self.ax.set_yticklabels(radial_labels)
 
+            self.prev_frame = None
+
         def updateTask(self, task):
             # NOTE: single queue, so don't enumerate tuples — just use it
             try:
@@ -128,6 +132,31 @@ def run_visualization(q1, cfg_radar, cfg_cfar):
                 mx = np.max(to_plot) if np.max(to_plot) != 0 else 1.0
                 to_plot /= mx 
                 to_plot = to_plot
+
+                # ---- ADDED: simple mooving things detection ----
+                if self.prev_frame is not None:
+                    # compute difference between current and previous frame
+                    diff = np.abs(to_plot - self.prev_frame)
+
+                    # only keep pixels that changed significantly
+                    motion_threshold = 0.3  # tune this: higher = less sensitive
+                    binary_map = diff > motion_threshold
+
+                    labeled, num_blobs = label(binary_map)
+
+                    if num_blobs > 0:
+                        print("There is someone moving!")
+                        centers = center_of_mass(diff, labeled, range(1, num_blobs + 1))
+                        for angle_idx, range_idx in centers:
+                            angle = self.phi[int(angle_idx)]
+                            distance = range_idx * 0.045
+                            x = distance * np.sin(angle)
+                            y = distance * np.cos(angle)
+                            print(f"  → moving object at x={x:.2f}m, y={y:.2f}m")
+
+                
+                self.prev_frame = to_plot.copy()
+                # ---- END OF DETECTION CODE ----
 
                 self.im.set_array(to_plot.ravel()) 
 
