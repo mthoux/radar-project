@@ -7,6 +7,8 @@ from scipy.ndimage import label, center_of_mass
 # import the producer (should not import GUI libs)
 from streaming_base.streaming.prod_dca import producer_real_time_1843
 
+from scipy.ndimage import label, center_of_mass
+
 # -------------------------
 # Visualization code is moved into a function so it is only imported/run
 # in the main process (no GUI imports at module top-level)
@@ -78,6 +80,8 @@ def run_visualization(q1, cfg_radar, cfg_cfar):
             # Apply ticks to the polar axis
             self.ax.set_rticks(radial_bins)
             self.ax.set_yticklabels(radial_labels)
+            self.prev_frame = None
+
             self.prev_frame = None
 
         def updateTask(self, task):
