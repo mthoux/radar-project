@@ -4,8 +4,8 @@ import numpy as np
 from multiprocessing import Process, Queue
 
 from streaming_base.streaming.prod_dca import producer_real_time_1843
-from src.gtrack.config import GTrackConfig2D, PresenceZone2D, Detection
-from src.gtrack.module import GTrackModule2D
+from gtrack.config import GTrackConfig2D, PresenceZone2D, Detection
+from gtrack.module import GTrackModule2D
 
 RANGE_FACTOR = 0.045352603795783
 
