@@ -11,28 +11,28 @@ RANGE_FACTOR = 0.045352603795783
 
 def build_gtrack_config(cfg_radar) -> GTrackConfig2D:
     return GTrackConfig2D(
-        max_points        = 100,
-        max_tracks        = 10,
-        dt                = cfg_radar.get("dt", 0.05),
-        process_noise     = 1.0,
-        meas_noise_range  = 0.1,
-        meas_noise_az     = 0.02,
-        gating_threshold  = 9.21,       
-        alloc_range_gate  = 0.5,
-        alloc_az_gate     = 0.2,
-        alloc_vel_gate    = 1.0,
-        min_cluster_points= 2,
-        alloc_snr_threshold= 5.0,
-        min_snr_threshold = 2.0,
-        init_state_cov    = 100.0,
-        det_to_active_count= 3,
-        det_to_free_count = 3,
-        act_to_free_count = 5,
-        presence_zones    = [
-            PresenceZone2D(x_min=-3, x_max=3, y_min=0, y_max=5)
+        max_points         = 100,
+        max_tracks         = 10,
+        dt                 = cfg_radar.get("dt", 0.05),
+        process_noise      = 1.0,
+        meas_noise_range   = 0.5,
+        meas_noise_az      = 0.05,
+        gating_threshold   = 9.21,
+        alloc_range_gate   = 5.0,        # bin units
+        alloc_az_gate      = 0.2,
+        alloc_vel_gate     = 1.0,
+        min_cluster_points = 3,
+        alloc_snr_threshold= 0.5,       # 0-1 scale
+        min_snr_threshold  = 0.05,       # 0-1 scale
+        init_state_cov     = 100.0,
+        det_to_active_count= 2,
+        det_to_free_count  = 3,
+        act_to_free_count  = 5,
+        presence_zones     = [
+            PresenceZone2D(x_min=-66, x_max=66, y_min=0, y_max=110)  # ~3m x 5m in bins
         ],
-        pres_on_count     = 3,
-        pres_off_count    = 10,
+        pres_on_count      = 2,
+        pres_off_count     = 10,
     )
 
 
@@ -60,7 +60,6 @@ def run_visualization(q1, cfg_radar, cfg_cfar):
         configure_ax_gtrack,
         update_ax_gtrack
     )
-
     from streaming_base.utils.utils import cart2pol
 
     class MyApp(ShowBase):
@@ -71,7 +70,7 @@ def run_visualization(q1, cfg_radar, cfg_cfar):
             self.latest_msg = {}
             self.msg_count = set()
 
-            self.phi    = cfg_radar["phi"]
+            self.phi    = cfg_radar["phi"]   # already -π/2 to +π/2
             self.r_idxs = cfg_radar["range_idx"]
 
             self.gtrack = GTrackModule2D(build_gtrack_config(cfg_radar))
@@ -82,12 +81,15 @@ def run_visualization(q1, cfg_radar, cfg_cfar):
 
             self.fig_2 = plt.figure(figsize=(6, 6))
             self.ax_2 = self.fig_2.add_subplot(111)
+            configure_ax_gtrack(self.ax_2, cfg_radar["width"], len(self.r_idxs))
 
-            configure_ax_gtrack(
-                self.ax_2,
-                cfg_radar["width"],
-                len(self.r_idxs)
-            )
+            # meter labels so we know real scale
+            meter_ticks_y = np.arange(0, len(self.r_idxs), 20)
+            self.ax_2.set_yticks(meter_ticks_y)
+            self.ax_2.set_yticklabels([f"{b * RANGE_FACTOR:.1f}m" for b in meter_ticks_y])
+            meter_ticks_x = np.arange(-cfg_radar["width"], cfg_radar["width"], 20)
+            self.ax_2.set_xticks(meter_ticks_x)
+            self.ax_2.set_xticklabels([f"{b * RANGE_FACTOR:.1f}m" for b in meter_ticks_x])
 
             self.last_artists = []
 
@@ -97,24 +99,27 @@ def run_visualization(q1, cfg_radar, cfg_cfar):
 
             self.running_max = 1.0
 
+            # static clutter removal
+            self.clutter_frames = []
+            self.clutter_map    = None
+            self.CLUTTER_LEARN  = 50
+
             self.taskMgr.add(self.updateTask, "updateTask")
 
-        def _get_detections(self, Z_polar_raw):
-            detections = []
-            amp = np.abs(Z_polar_raw)
-
-            thresh = amp.max() * 0.2
-            candidates = np.argwhere(amp > thresh)
-
-            for (ai, ri) in candidates:
-                angle = self.phi[ai]
-                r_bin = self.r_idxs[ri]
-                r_m   = r_bin * RANGE_FACTOR
-                snr   = float(amp[ai, ri])
-
-                detections.append(Detection(r_m, angle, 0.0, snr))
-
-            return detections
+        def _get_detections(self, to_plot):
+            """Feed bin-unit r and centered azimuth to gtrack."""
+            max_range_bin = len(self.r_idxs) - 5
+            return [
+                Detection(
+                    r   = self.r_idxs[i],   # bin units — consistent with update_ax_gtrack
+                    az  = self.phi[j] - np.pi/2,       
+                    v   = 0,
+                    snr = to_plot[j, i]
+                )
+                for i in range(max_range_bin)
+                for j in range(len(self.phi))
+                if to_plot[j, i] >= self.gtrack.config.min_snr_threshold
+            ]
 
         def updateTask(self, task):
             try:
@@ -129,35 +134,26 @@ def run_visualization(q1, cfg_radar, cfg_cfar):
             if self.msg_count == {0}:
                 bf_1 = self.latest_msg[0]
 
-                phi1 = np.arctan2(self.Y.ravel(), self.X.ravel())
-                r1   = np.hypot(self.X.ravel(), self.Y.ravel())
+                phi1      = np.arctan2(self.Y.ravel(), self.X.ravel())
+                r1        = np.hypot(self.X.ravel(), self.Y.ravel())
                 cart2pol1 = np.column_stack((phi1, r1))
 
                 interp1 = RegularGridInterpolator(
-                    (self.phi, self.r_idxs),
-                    bf_1,
-                    method='linear',
-                    bounds_error=False,
-                    fill_value=0
+                    (self.phi, self.r_idxs), bf_1,
+                    method='linear', bounds_error=False, fill_value=0
                 )
-
                 Z_cart = interp1(cart2pol1).reshape(self.X.shape)
 
                 interp_cart2pol = RegularGridInterpolator(
-                    (self.y, self.x),
-                    Z_cart,
-                    method='linear',
-                    bounds_error=False,
-                    fill_value=0
+                    (self.y, self.x), Z_cart,
+                    method='linear', bounds_error=False, fill_value=0
                 )
 
                 PHI, R = np.meshgrid(self.phi, self.r_idxs, indexing='ij')
-
                 pts_back = np.column_stack((
                     (R * np.sin(PHI)).ravel(),
                     (R * np.cos(PHI)).ravel()
                 ))
-
                 Z_polar = interp_cart2pol(pts_back).reshape(PHI.shape)
                 Z_polar = np.flip(Z_polar, axis=0)
 
@@ -165,20 +161,47 @@ def run_visualization(q1, cfg_radar, cfg_cfar):
                 self.running_max = max(self.running_max * 0.99, raw.max())
                 to_plot = raw / self.running_max
 
+                # --- static clutter learning & removal ---
+                if len(self.clutter_frames) < self.CLUTTER_LEARN:
+                    self.clutter_frames.append(to_plot.copy())
+                    self.clutter_map = np.mean(self.clutter_frames, axis=0)
+                    self.im.set_array((to_plot ** 2).ravel())
+                    self.fig_1.canvas.draw_idle()
+                    QtWidgets.QApplication.processEvents()
+                    self.msg_count.clear()
+                    plt.pause(0.001)
+                    return Task.cont
+
+                # subtract static background
+                to_plot = np.clip(to_plot - self.clutter_map, 0, None)
+                to_plot = to_plot ** 2   # contrast for display
 
                 self.im.set_array(to_plot.ravel())
 
-                detections = self._get_detections(Z_polar)
+                detections = self._get_detections(to_plot)
+                print(f"DEBUG: {len(detections)} detections fed to gtrack")
+
                 gtrack_out = self.gtrack.step(detections)
-                tracks = gtrack_out['tracks']
+                tracks     = gtrack_out['tracks']
+                print(f"DEBUG: {len(tracks)} tracks, active: {[t['status'] for t in tracks]}")
+
+                for t in tracks:
+                    if t['status'] == 'ACTIVE':
+                        tx, ty = t['pos']
+                        vx, vy = t['vel']
+                        speed  = np.hypot(vx, vy)
+                        if speed > 0.05:
+                            # convert bins → meters only for printing
+                            print(f"There is a moving object at "
+                                  f"x={tx * RANGE_FACTOR:.2f}m, "
+                                  f"y={ty * RANGE_FACTOR:.2f}m  "
+                                  f"(speed={speed * RANGE_FACTOR:.2f}m/s)")
 
                 update_ax_gtrack(self.ax_2, tracks, self.last_artists)
 
                 self.fig_1.canvas.draw_idle()
                 self.fig_2.canvas.draw_idle()
-
                 QtWidgets.QApplication.processEvents()
-
                 self.msg_count.clear()
                 plt.pause(0.001)
 

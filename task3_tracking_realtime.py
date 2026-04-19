@@ -6,6 +6,7 @@ import argparse
 from utils.read_com import find_com_port, update_com_port_in_file
 import os 
 from streaming_base.streaming import moovingObj_streaming
+from streaming_base.streaming import moovingObjv2_streaming
 
 '''
     The primary things to change in this file are paths to various locations on your computer (mainly inside this repo itself) at the bototm of this file.
@@ -53,8 +54,8 @@ def main(cfar_on):
     print("Starting streaming...")
 
     # Start the streaming process
-    realtime_streaming_task3.main(cfg_radar, cfg_cfar)
-    # moovingObj_streaming.main(cfg_radar, cfg_cfar)
+    # realtime_streaming_task3.main(cfg_radar, cfg_cfar)
+    moovingObjv2_streaming.main(cfg_radar, cfg_cfar)
 
 if __name__ == "__main__":
     
