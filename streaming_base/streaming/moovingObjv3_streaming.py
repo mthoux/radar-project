@@ -11,7 +11,7 @@ RANGE_FACTOR = 0.045352603795783
 
 def build_gtrack_config(cfg_radar) -> GTrackConfig2D:
     return GTrackConfig2D(
-        max_points         = 100,
+        max_points         = 60,
         max_tracks         = 1,
         dt                 = cfg_radar.get("dt", 0.05),
         process_noise      = 1.0,
@@ -29,7 +29,7 @@ def build_gtrack_config(cfg_radar) -> GTrackConfig2D:
         det_to_free_count  = 10,
         act_to_free_count  = 5,
         presence_zones     = [
-            PresenceZone2D(x_min=-66, x_max=66, y_min=0, y_max=110)  # ~3m x 5m in bins
+            PresenceZone2D(x_min = -2,x_max =  2,y_min =  0,y_max =  5)
         ],
         pres_on_count      = 2,
         pres_off_count     = 10,
@@ -70,7 +70,7 @@ def run_visualization(q1, cfg_radar, cfg_cfar):
             self.latest_msg = {}
             self.msg_count = set()
 
-            self.phi    = cfg_radar["phi"]   # already -π/2 to +π/2
+            self.phi    = cfg_radar["phi"]
             self.r_idxs = cfg_radar["range_idx"]
 
             self.gtrack = GTrackModule2D(build_gtrack_config(cfg_radar))
@@ -78,6 +78,14 @@ def run_visualization(q1, cfg_radar, cfg_cfar):
             self.fig_1 = plt.figure(figsize=(6, 6))
             self.ax_1 = self.fig_1.add_subplot(111, projection='polar')
             self.im = configure_ax_bf(self.ax_1, self.phi, self.r_idxs, 0, 0.3)
+
+            num_ticks = 6
+            radial_bins = np.linspace(self.r_idxs.min(), self.r_idxs.max(), num_ticks)
+            radial_labels = [f"{r * RANGE_FACTOR:.2f} m" for r in radial_bins]
+            self.ax_1.set_rticks(radial_bins)
+            self.ax_1.set_yticklabels(radial_labels)
+
+            self.ax_1.set_title("Bird Eye View (meters)", fontsize=12)
 
             self.fig_2 = plt.figure(figsize=(6, 6))
             self.ax_2 = self.fig_2.add_subplot(111)
@@ -111,14 +119,14 @@ def run_visualization(q1, cfg_radar, cfg_cfar):
             dets = []
             for i in range(max_range_bin):
                 range_m = self.r_idxs[i] * RANGE_FACTOR
-                range_threshold = max(0.005, 0.05 / (1 + range_m ** 2))
+                range_threshold = max(0.005, 0.03 / (1 + range_m ** 2))
                 for j in range(len(self.phi)):
                     if to_plot_raw[j, i] >= range_threshold:
                         dets.append(Detection(
                             r   = self.r_idxs[i],
                             az  = self.phi[j] - np.pi/2,
                             v   = 0,
-                            snr = to_plot_raw[j, i]
+                            snr = to_plot_raw[j, i] * (1 + range_m**2)
                         ))
             dets.sort(key=lambda d: d.snr, reverse=True)
             return dets[:100]
@@ -161,7 +169,8 @@ def run_visualization(q1, cfg_radar, cfg_cfar):
 
                 raw = np.abs(Z_polar)
                 self.running_max = max(self.running_max * 0.99, raw.max())
-                to_plot = raw / self.running_max
+                to_plot = np.log1p(raw)
+                to_plot = to_plot / np.max(to_plot)
 
                 # --- static clutter learning & removal ---
                 if len(self.clutter_frames) < self.CLUTTER_LEARN:
@@ -175,12 +184,14 @@ def run_visualization(q1, cfg_radar, cfg_cfar):
                     return Task.cont
 
                 # subtract static background
-                to_plot = np.clip(to_plot - self.clutter_map, 0, None)
-                to_plot = to_plot ** 2   # contrast for display
+                to_plot_raw = np.clip(to_plot - 0.7 * self.clutter_map, 0, None)
 
-                self.im.set_array(to_plot.ravel())
+                # for display only
+                to_plot_display = to_plot_raw
+                self.im.set_array(to_plot_display.ravel())
 
-                detections = self._get_detections(to_plot)
+                # feed raw (not squared) to gtrack
+                detections = self._get_detections(to_plot_raw)
                 print(f"DEBUG: {len(detections)} detections fed to gtrack")
 
                 gtrack_out = self.gtrack.step(detections)
@@ -193,11 +204,10 @@ def run_visualization(q1, cfg_radar, cfg_cfar):
                         vx, vy = t['vel']
                         speed  = np.hypot(vx, vy)
                         if speed > 0.05:
-                            # convert bins → meters only for printing
                             print(f"There is a moving object at "
-                                  f"x={tx * RANGE_FACTOR:.2f}m, "
-                                  f"y={ty * RANGE_FACTOR:.2f}m  "
-                                  f"(speed={speed * RANGE_FACTOR:.2f}m/s)")
+                                f"x={tx * RANGE_FACTOR:.2f}m, "
+                                f"y={ty * RANGE_FACTOR:.2f}m  "
+                                f"(speed={speed * RANGE_FACTOR:.2f}m/s)")
 
                 update_ax_gtrack(self.ax_2, tracks, self.last_artists)
 
