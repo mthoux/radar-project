@@ -1,7 +1,8 @@
+from streaming_base.streaming.new import init_streaming
 from utils.radar import radar # this contains helper functions to interact with the radar from Python (after opening up mmWave studio)
 import numpy as np
 import utils.utility as utility
-from streaming_base.streaming import realtime_streaming_task3 
+from streaming_base.streaming import realtime_streaming 
 import argparse
 from utils.read_com import list_files, find_com_port, update_com_port_in_file, find_rtt_dll, update_rtt_path_in_file
 import os 
@@ -52,7 +53,8 @@ def main(cfar_on):
     print("Starting streaming...")
 
     # Start the streaming process
-    realtime_streaming_task3.main(cfg_radar, cfg_cfar)
+    #realtime_streaming.main(cfg_radar, cfg_cfar)
+    init_streaming.main(cfg_radar, cfg_cfar)
 
 if __name__ == "__main__":
     
