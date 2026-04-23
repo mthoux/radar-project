@@ -82,4 +82,5 @@ if __name__ == "__main__":
 
         radar1 = radar()
         radar1.mmwave_config(config_lua_script)
+        
     main(args.cfar)
