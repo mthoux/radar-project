@@ -4,39 +4,13 @@ import numpy as np
 from multiprocessing import Process, Queue
 
 from streaming_base.streaming.prod_dca import producer_real_time_1843
-from gtrack.config import GTrackConfig2D, PresenceZone2D, Detection
-from gtrack.module import GTrackModule2D
 
+# Conversion factor from range bin index to meters
 RANGE_FACTOR = 0.045352603795783
 
-def build_gtrack_config(cfg_radar) -> GTrackConfig2D:
-    return GTrackConfig2D(
-        max_points         = 100,
-        max_tracks         = 10,
-        dt                 = cfg_radar.get("dt", 0.05),
-        process_noise      = 1.0,
-        meas_noise_range   = 0.5,
-        meas_noise_az      = 0.05,
-        gating_threshold   = 9.21,
-        alloc_range_gate   = 5.0,        # bin units
-        alloc_az_gate      = 0.2,
-        alloc_vel_gate     = 1.0,
-        min_cluster_points = 3,
-        alloc_snr_threshold= 0.5,       # 0-1 scale
-        min_snr_threshold  = 0.05,       # 0-1 scale
-        init_state_cov     = 100.0,
-        det_to_active_count= 2,
-        det_to_free_count  = 3,
-        act_to_free_count  = 5,
-        presence_zones     = [
-            PresenceZone2D(x_min=-66, x_max=66, y_min=0, y_max=110)  # ~3m x 5m in bins
-        ],
-        pres_on_count      = 2,
-        pres_off_count     = 10,
-    )
-
-
 def run_visualization(q1, cfg_radar, cfg_cfar):
+    # GUI imports are deferred here so they only load in the main process
+    # (child processes must not import GUI libraries)
     import warnings
     warnings.simplefilter("ignore", UserWarning)
 
@@ -45,83 +19,61 @@ def run_visualization(q1, cfg_radar, cfg_cfar):
     from direct.task import Task
 
     import matplotlib
-    matplotlib.use('Qt5Agg')
+    matplotlib.use('Qt5Agg')  # use Qt5 backend for interactive display
     import matplotlib.pyplot as plt
     plt.style.use('seaborn-v0_8-dark')
 
     from panda3d.core import loadPrcFileData
-    loadPrcFileData('', 'window-type none')
-    loadPrcFileData('', 'audio-library-name null')
+    loadPrcFileData('', 'window-type none')    # disable Panda3D native window
+    loadPrcFileData('', 'audio-library-name null')  # disable audio
 
     from PyQt5 import QtWidgets
-
-    from streaming_base.visualization.visualization import (
-        configure_ax_bf,
-        configure_ax_gtrack,
-        update_ax_gtrack
-    )
-    from streaming_base.utils.utils import cart2pol
+    from streaming_base.visualization.visualization import configure_ax_bf
 
     class MyApp(ShowBase):
         def __init__(self, queue_1, cfg_radar):
             ShowBase.__init__(self)
 
             self.q1 = queue_1
-            self.latest_msg = {}
-            self.msg_count = set()
+            self.latest_msg = {}   # stores latest frame per producer
+            self.msg_count = set() # tracks which producers have sent a new frame
 
-            self.phi    = cfg_radar["phi"]   # already -π/2 to +π/2
-            self.r_idxs = cfg_radar["range_idx"]
+            # radar geometry parameters
+            self.phi    = cfg_radar["phi"]         # azimuth angles (radians), 0→π
+            self.r_idxs = cfg_radar["range_idx"]   # range bin indices
 
-            self.gtrack = GTrackModule2D(build_gtrack_config(cfg_radar))
-
+            # --- polar bird-eye-view plot ---
             self.fig_1 = plt.figure(figsize=(6, 6))
             self.ax_1 = self.fig_1.add_subplot(111, projection='polar')
             self.im = configure_ax_bf(self.ax_1, self.phi, self.r_idxs, 0, 0.3)
 
-            self.fig_2 = plt.figure(figsize=(6, 6))
-            self.ax_2 = self.fig_2.add_subplot(111)
-            configure_ax_gtrack(self.ax_2, cfg_radar["width"], len(self.r_idxs))
+            # add meter labels to the radial axis instead of raw bin indices
+            num_ticks   = 6
+            radial_bins = np.linspace(self.r_idxs.min(), self.r_idxs.max(), num_ticks)
+            radial_labels = [f"{r * RANGE_FACTOR:.2f}m" for r in radial_bins]
+            self.ax_1.set_yticks(radial_bins)
+            self.ax_1.set_yticklabels(radial_labels)
+            self.ax_1.set_title("Bird Eye View (background removed)")
 
-            # meter labels so we know real scale
-            meter_ticks_y = np.arange(0, len(self.r_idxs), 20)
-            self.ax_2.set_yticks(meter_ticks_y)
-            self.ax_2.set_yticklabels([f"{b * RANGE_FACTOR:.1f}m" for b in meter_ticks_y])
-            meter_ticks_x = np.arange(-cfg_radar["width"], cfg_radar["width"], 20)
-            self.ax_2.set_xticks(meter_ticks_x)
-            self.ax_2.set_xticklabels([f"{b * RANGE_FACTOR:.1f}m" for b in meter_ticks_x])
-
-            self.last_artists = []
-
+            # cartesian grid for the polar↔cartesian round-trip interpolation
             self.x = np.arange(-cfg_radar["width"], cfg_radar["width"], 1)
             self.y = self.r_idxs
             self.X, self.Y = np.meshgrid(self.x, self.y, indexing='xy')
 
+            # running max used for frame-to-frame normalization
+            # decays slowly so it adapts to changing signal levels
             self.running_max = 1.0
 
-            # static clutter removal
-            self.clutter_frames = []
-            self.clutter_map    = None
-            self.CLUTTER_LEARN  = 50
+            # --- static clutter (background) removal ---
+            self.clutter_frames = []   # accumulates frames during learning phase
+            self.clutter_map    = None # average of learning frames = static background
+            self.CLUTTER_LEARN  = 50   # number of frames to learn background (~2.5s at 20fps)
 
+            # register the update function with Panda3D's task manager
             self.taskMgr.add(self.updateTask, "updateTask")
 
-        def _get_detections(self, to_plot):
-            """Feed bin-unit r and centered azimuth to gtrack."""
-            max_range_bin = len(self.r_idxs) - 5
-            return [
-                Detection(
-                    r   = self.r_idxs[i],   # bin units — consistent with update_ax_gtrack
-                    az  = self.phi[j] - np.pi/2,       
-                    v   = 0,
-                    snr = to_plot[j, i]
-                )
-                for i in range(max_range_bin)
-                for j in range(len(self.phi))
-                if to_plot[j, i] >= self.gtrack.config.min_snr_threshold
-            ]
-
         def updateTask(self, task):
+            # drain the queue, keeping only the latest frame
             try:
                 while not self.q1.empty():
                     msg = self.q1.get_nowait()
@@ -131,97 +83,96 @@ def run_visualization(q1, cfg_radar, cfg_cfar):
             except:
                 pass
 
+            # only process when a new frame has arrived
             if self.msg_count == {0}:
-                bf_1 = self.latest_msg[0]
+                bf_1 = self.latest_msg[0]  # raw beamformed polar frame (phi x range)
 
+                # --- polar → cartesian → polar round-trip ---
+                # step 1: compute polar coordinates of each cartesian grid point
                 phi1      = np.arctan2(self.Y.ravel(), self.X.ravel())
                 r1        = np.hypot(self.X.ravel(), self.Y.ravel())
                 cart2pol1 = np.column_stack((phi1, r1))
 
+                # step 2: interpolate the beamformed frame onto the cartesian grid
                 interp1 = RegularGridInterpolator(
                     (self.phi, self.r_idxs), bf_1,
                     method='linear', bounds_error=False, fill_value=0
                 )
                 Z_cart = interp1(cart2pol1).reshape(self.X.shape)
 
+                # step 3: interpolate the cartesian map back to the original polar grid
+                # this round-trip smooths interpolation artifacts
                 interp_cart2pol = RegularGridInterpolator(
                     (self.y, self.x), Z_cart,
                     method='linear', bounds_error=False, fill_value=0
                 )
-
                 PHI, R = np.meshgrid(self.phi, self.r_idxs, indexing='ij')
                 pts_back = np.column_stack((
-                    (R * np.sin(PHI)).ravel(),
-                    (R * np.cos(PHI)).ravel()
+                    (R * np.sin(PHI)).ravel(),  # x = r*sin(phi)
+                    (R * np.cos(PHI)).ravel()   # y = r*cos(phi)
                 ))
                 Z_polar = interp_cart2pol(pts_back).reshape(PHI.shape)
+
+                # flip axis 0 to match display orientation (0° at top)
                 Z_polar = np.flip(Z_polar, axis=0)
 
+                # --- normalization ---
                 raw = np.abs(Z_polar)
+                # update running max with slow decay so normalization stays stable
                 self.running_max = max(self.running_max * 0.99, raw.max())
-                to_plot = raw / self.running_max
+                to_plot = raw / self.running_max  # values now in [0, 1]
 
-                # --- static clutter learning & removal ---
+                # --- background learning phase (first CLUTTER_LEARN frames) ---
                 if len(self.clutter_frames) < self.CLUTTER_LEARN:
                     self.clutter_frames.append(to_plot.copy())
+                    # incrementally update clutter map as new frames arrive
                     self.clutter_map = np.mean(self.clutter_frames, axis=0)
+                    remaining = self.CLUTTER_LEARN - len(self.clutter_frames)
+                    self.ax_1.set_title(f"Learning background... ({remaining} frames left)")
+                    # show raw (squared for contrast) during learning so display is not blank
                     self.im.set_array((to_plot ** 2).ravel())
                     self.fig_1.canvas.draw_idle()
                     QtWidgets.QApplication.processEvents()
                     self.msg_count.clear()
                     plt.pause(0.001)
-                    return Task.cont
+                    return Task.cont  # skip detection until background is learned
 
-                # subtract static background
+                # --- background subtraction ---
+                # subtract the learned static clutter map and clip negatives to 0
+                # result: only dynamic (moving/changed) parts remain
                 to_plot = np.clip(to_plot - self.clutter_map, 0, None)
-                to_plot = to_plot ** 2   # contrast for display
 
+                # square for display contrast: boosts strong returns, suppresses weak noise
+                to_plot = to_plot ** 2
+
+                # --- update display ---
                 self.im.set_array(to_plot.ravel())
-
-                detections = self._get_detections(to_plot)
-                print(f"DEBUG: {len(detections)} detections fed to gtrack")
-
-                gtrack_out = self.gtrack.step(detections)
-                tracks     = gtrack_out['tracks']
-                print(f"DEBUG: {len(tracks)} tracks, active: {[t['status'] for t in tracks]}")
-
-                for t in tracks:
-                    if t['status'] == 'ACTIVE':
-                        tx, ty = t['pos']
-                        vx, vy = t['vel']
-                        speed  = np.hypot(vx, vy)
-                        if speed > 0.05:
-                            # convert bins → meters only for printing
-                            print(f"There is a moving object at "
-                                  f"x={tx * RANGE_FACTOR:.2f}m, "
-                                  f"y={ty * RANGE_FACTOR:.2f}m  "
-                                  f"(speed={speed * RANGE_FACTOR:.2f}m/s)")
-
-                update_ax_gtrack(self.ax_2, tracks, self.last_artists)
-
                 self.fig_1.canvas.draw_idle()
-                self.fig_2.canvas.draw_idle()
                 QtWidgets.QApplication.processEvents()
                 self.msg_count.clear()
                 plt.pause(0.001)
 
-            return Task.cont
+            return Task.cont  # tell Panda3D to call this task again next frame
 
     app = MyApp(q1, cfg_radar)
     app.run()
 
 
 def main(cfg_radar, cfg_cfar):
+    # create a queue with maxsize=1 so only the latest frame is kept
+    # if the consumer is slow, old frames are dropped automatically
     q_main_1 = Queue(maxsize=1)
 
+    # run the radar producer in a separate process so it doesn't block the GUI
     producer = Process(
         target=producer_real_time_1843,
         args=(q_main_1, cfg_radar, cfg_cfar, 4096, 4098, "192.168.33.30", "192.168.33.180"),
-        daemon=True
+        daemon=True  # dies automatically when main process exits
     )
     producer.start()
     print("Producer started, launching visualization in main process...")
 
+    # run visualization in the main process (required for GUI on most OSes)
     run_visualization(q_main_1, cfg_radar, cfg_cfar)
 
     try:
