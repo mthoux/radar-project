@@ -13,18 +13,42 @@ NUM_TX = 3
 -- Number of receivers you want to use (note that you still have to change ChaNAdcConfig to reflect this)
 NUM_RX = 4
 
+-- -- ProfileConfig
+-- -- START_FREQ: starting frequency of the FMCW chirp, TI1843 only starts from 77 GHz
+-- START_FREQ = 77 -- GHz
+-- -- IDLE_TIME: time between subsequent chirps (check RampTimingCalculator in mmWave Studio 
+-- -- to calculate different values (dependent on FREQ_SLOP, ADC_SAMPLES, and SAMPLE_RATE))
+-- IDLE_TIME = 7 -- us
+-- -- RAMP_END_TIME: length of the entire frequency sweep (check RampTimingCalculator in mmWave 
+-- -- Studio to calculate different values (dependent on FREQ_SLOP, ADC_SAMPLES, and SAMPLE_RATE))
+-- RAMP_END_TIME = 61.89 -- us
+-- -- ADC_START_TIME: time that samples start to be taken (check RampTimingCalculator in mmWave 
+-- -- Studio to calculate different values (dependent on FREQ_SLOP, ADC_SAMPLES, and SAMPLE_RATE))
+-- ADC_START_TIME = 8.66 --usn
+-- -- FREQ_SLOPE: slope of the frequency sweep in the FMCW chirp, changing this along with 
+-- -- ADC_SAMPLES and SAMPLE_RATE will affect the bandwidth
+-- FREQ_SLOPE = 64.598 -- MHz/us
+-- -- ADC_SAMPLES: number of samples we want to take (ex. when taking range FFT, this translates 
+-- -- to number of range bins we get), changing this along with FREQ_SLOPE and SAMPLE_RATE will affect the bandwidth
+-- ADC_SAMPLES = 128
+-- -- SAMPLE_RATE: sample rate for ADC_SAMPLES, changing this along with ADC_SAMPLES and 
+-- -- FREQ_SLOPE will affect the bandwidth
+-- SAMPLE_RATE = 2500 -- ksps
+-- -- RX_GAIN: reciever gain
+-- RX_GAIN = 30 -- dB
+
 -- ProfileConfig
 -- START_FREQ: starting frequency of the FMCW chirp, TI1843 only starts from 77 GHz
 START_FREQ = 77 -- GHz
 -- IDLE_TIME: time between subsequent chirps (check RampTimingCalculator in mmWave Studio 
 -- to calculate different values (dependent on FREQ_SLOP, ADC_SAMPLES, and SAMPLE_RATE))
-IDLE_TIME = 7 -- us
+IDLE_TIME = 2 -- us
 -- RAMP_END_TIME: length of the entire frequency sweep (check RampTimingCalculator in mmWave 
 -- Studio to calculate different values (dependent on FREQ_SLOP, ADC_SAMPLES, and SAMPLE_RATE))
-RAMP_END_TIME = 61.89 -- us
+RAMP_END_TIME = 11.78 -- us
 -- ADC_START_TIME: time that samples start to be taken (check RampTimingCalculator in mmWave 
 -- Studio to calculate different values (dependent on FREQ_SLOP, ADC_SAMPLES, and SAMPLE_RATE))
-ADC_START_TIME = 8.66 --usn
+ADC_START_TIME = 5.13 --usn
 -- FREQ_SLOPE: slope of the frequency sweep in the FMCW chirp, changing this along with 
 -- ADC_SAMPLES and SAMPLE_RATE will affect the bandwidth
 FREQ_SLOPE = 64.598 -- MHz/us
@@ -33,7 +57,7 @@ FREQ_SLOPE = 64.598 -- MHz/us
 ADC_SAMPLES = 128
 -- SAMPLE_RATE: sample rate for ADC_SAMPLES, changing this along with ADC_SAMPLES and 
 -- FREQ_SLOPE will affect the bandwidth
-SAMPLE_RATE = 2500 -- ksps
+SAMPLE_RATE = 20000 -- ksps
 -- RX_GAIN: reciever gain
 RX_GAIN = 30 -- dB
 
